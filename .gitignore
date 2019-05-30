@@ -7,3 +7,5 @@ csgo/
 csgo.bak/
 args.config_file
 *.spec
+test.log
+test.py

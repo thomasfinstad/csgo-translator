@@ -9,6 +9,7 @@ from pprint import pprint
 import googletrans
 import unicodedata
 import pickle
+from operator import itemgetter
 
 class controller(object):
     work_dir = ''
@@ -26,24 +27,31 @@ class controller(object):
         #talk_log = logFile(self.work_dir + '/' + talk_log_path)
         #translate_log = logFile(self.work_dir + '/' + translate_log_path)
 
+        for section, config in self.config.config.items():
+            self.interface.output('status', f"Config: {section}: {config}")
+
         self.interface.output('status', "Createing console_log")
         console_log = logFile(self.config.getConfig('console_log_path'), self.config.getConfig('translation_keyword'))
+        
+        self.interface.output('status', f"Looking for cache at {self.config.getConfig('cache_file')}")
+        translator_cache = cache(self.config.getConfig('cache_file'), self.config.getConfig('cache_size'))
+        self.interface.output('status', f"Loaded cache with {translator_cache.getSize()}/{self.config.getConfig('cache_size')} items")
+
         self.interface.output('status', "Createing translator")
-        translator = translator_worker('en', cache(self.config.getConfig('cache_file'), self.config.getConfig('cache_size')))
+        translator = translator_worker('en', translator_cache)
 
         self.interface.output('status', "Run console_log")
         console_log.run()
         self.interface.output('status', "Run translator")
         translator.run()
 
-        self.interface.output('status', "View console log status for 10 sec(ish)")
         oldstatus = ''
         #for i in range(0,1000):
         while True:
             status = console_log.getStatus()
-            if status != oldstatus:
-                oldstatus = status
-                self.interface.output('status', f"console log: {status}")
+            #if status != oldstatus:
+            #    oldstatus = status
+            #    self.interface.output('status', f"console log: {status}")
             if status == 'eof':
                 break
             time.sleep(0.001)
@@ -52,11 +60,15 @@ class controller(object):
         chat = chatLog()
         chat.addChat(console_log.getContent())
         
-        self.interface.output('status', "Output chat")
-        for line in chat.getNewChatLines():
-            self.interface.output('chat', f"{line['player']} -> {line['msg']}")
+        #self.interface.output('status', "Output chat")
 
-        self.interface.output('status', "Truncate cfg file")
+        oldChatCount = 0
+        for line in chat.getNewChatLines():
+            oldChatCount = oldChatCount + 1
+            #self.interface.output('chat', f"{line['player']} -> {line['msg']}")
+        self.interface.output('status', f"Ignoring {oldChatCount} old chat messages")
+
+        self.interface.output('status', "Truncate csgo_cfg file")
         with open(self.config.getConfig('translate_output_cfg'), 'r') as cfg_file_read:
             lines = cfg_file_read.readlines()
         if len(lines) > 10:
@@ -65,6 +77,7 @@ class controller(object):
 
         # Main loop
         oldyou = None
+        oldtranslatorstatus = ''
         while True:
             chatLines = chat.getNewChatLines()
             status = console_log.getStatus()
@@ -82,9 +95,11 @@ class controller(object):
                     self.interface.output('status', "open CFG")
                     cfg_file = open(self.config.getConfig('translate_output_cfg'), 'a', encoding = 'utf-8', errors = 'replace')
                     for line in lines:
-                        self.interface.output('status', f"translator: {translator.getStatus()}")
-                        self.interface.output('status', f"write to cfg file: echo {line.player} [{line.src}] >>> {line.text}\n")
-                        cfg_file.write(f"echo {line.player} [{line.src}] >>> {line.text}\n")
+                        translatorstatus = translator.getStatus()
+                        if oldtranslatorstatus != translatorstatus:
+                            self.interface.output('status', f"translator: {translatorstatus}")
+                        self.interface.output('status', f"write to cfg file: echo {line.player} [{line.src}] >>> {re.sub(' : ', ': ', line.text)}\n")
+                        cfg_file.write(f"echo {line.player} [{line.src}] >>> {re.sub(' : ', ': ', line.text)}\n")
                     cfg_file.close()
                 chat.addChat(console_log.getContent())
                 if chat.getYou() and chat.getYou() != oldyou:
@@ -114,7 +129,7 @@ class controller(object):
 class chatLog(object):
     you_search = re.compile(r'^Player: (.*) - Damage (Taken|Given)$')
     you = False
-    talk_search = re.compile(r'^(?P<ping_messure>[ ]{10,})?(?P<is_dead>\*DEAD\*[ ]*)?(?P<player>.*). : (?P<msg>.*?)$')
+    talk_search = re.compile(r'^(?P<ping_messure>[ ]{10,})?(?P<is_dead>\*DEAD\*[ ]*)?(?P<player>.*?) : (?P<msg>.*)$')
     previousMatch = {'player': '', 'msg': ''}
     chatLines = []
     viewedChatIndex = 0
@@ -130,16 +145,28 @@ class chatLog(object):
 
     def addChat(self, lines):
         for line in lines:
-            line = "".join(ch for ch in line if unicodedata.category(ch)[0]!="C")
             youSearchResult = self.you_search.search(line)
-            if youSearchResult and self.you != youSearchResult.group(1):
-                self.you = youSearchResult.group(1)
+            if youSearchResult:
+
+                # Remove control characters
+                youResult = "".join(ch for ch in youSearchResult.group(1) if unicodedata.category(ch)[0]!="C")
+                if self.you != youResult:
+                    self.you = youResult
             else:
                 chatSearchResult = self.talk_search.search(line)
-                if chatSearchResult and not chatSearchResult.group('player') == self.you and chatSearchResult.group('ping_messure') == None:
+                if chatSearchResult and chatSearchResult.group('ping_messure') == None:
                     match = chatSearchResult.groupdict()
-                    self.previousMatch = match
-                    self.chatLines.append(match)
+
+                    # Remove control characters
+                    for field, value in match.items():
+                        # Some fields will be None, like ping_messure etc
+                        if value:
+                            match[field] = "".join(ch for ch in value if unicodedata.category(ch)[0]!="C")
+
+                    if match['player'] != self.you:
+                        
+                        self.previousMatch = match
+                        self.chatLines.append(match)
                 
 # Config and cache
 class config(object):
@@ -234,17 +261,30 @@ class config(object):
         return self.config[param]
     def writeConfig(self):
         with open(self.config_file_path, 'w') as config_file:
+            self.configparser.read_dict({'main':self.config})
             self.configparser.write(config_file)
 
 class cache(object):
     cache_file = ''
-    cache_size = 0
+    cache_max_size = 0
+
+    """
+    List of dicts,
+    it will not recognize a change in destination language,
+    to empty the cache simply delete the cache file.
+    Format:
+    {
+        'src': 'source language',
+        'origin': 'original message text',
+        'text': 'translated text
+    }
+    """
     cache = []
 
-    def __init__(self, cache_file, cache_size): 
+    def __init__(self, cache_file, cache_max_size): 
 
         self.cache_file = cache_file
-        self.cache_size = cache_size
+        self.cache_max_size = cache_max_size
 
         # Create directory for cache
         if not os.path.exists(os.path.dirname(self.cache_file)):
@@ -259,6 +299,8 @@ class cache(object):
         with open(self.cache_file, 'rb') as cache_file:
             try:
                 self.cache = pickle.load(cache_file)
+                # This line is only ment to trim the cache in case it is now too large for the max size.
+                self.truncateCache()
             except EOFError:
                 pass
     def _writeCache(self):
@@ -270,7 +312,13 @@ class cache(object):
 
     #Make cache 1 size smaller than max size
     def truncateCache(self):
-        pass
+        if self.cache_max_size < self.getSize():
+            sortedCache = sorted(self.cache, key=itemgetter('timestamp'))
+            overflowCount = int(self.getSize() - self.cache_max_size + 1)
+            self.cache = sortedCache[overflowCount:]
+            return overflowCount
+        else:
+            return False
         
     def checkCache(self, origintext=''):
         result = [cache for cache in self.cache if cache['origin'] == origintext]
@@ -281,10 +329,15 @@ class cache(object):
         else:
             return False
 
+    def getSize(self):
+        return len(self.cache)
+
     # Takes a single cache dict in the format described above, timestamp will be added if missing or replaced if present
     def addCache(self, cache):
-        if len(self.cache) > self.cache_size:
-            self.truncateCache()
+        truncated = False
+        if self.getSize() > self.cache_max_size:
+            truncated = self.truncateCache()
+            
         
         cache['timestamp'] = time.time()
         
@@ -293,11 +346,12 @@ class cache(object):
 
         self.cache.append(cache)
         self._writeCache()
+        return truncated
         
 
 class viewConsole():
     def output(self, field, message):
-        print('(' + field + ' field) ' + message)
+        print(repr('(' + field + ' field) ' + message))
 
 class logFile(object):
     logfile_path = ''
@@ -325,7 +379,10 @@ class logFile(object):
 
     def getStatus(self):
         while not self.statusQ.empty():
-            self.status = self.statusQ.get()
+            status = self.statusQ.get()
+            if status != self.status:
+                self.status = status
+                break
         return self.status
 
     def stop(self):
@@ -421,10 +478,14 @@ class translator_worker(object):
         messagesGot = 0
         tries = 0
         while (messagesGot < minOutput or messagesGot < maxOutput) and tries < maxTries:
+
+            # used for debug
             Qstatus = str(f"empty: {str(self.outputQ.empty())}, size: {str(self.outputQ.qsize())}, full: {str(self.outputQ.full())}")
             if Qstatus != self.oldQstatus:
                 self.oldQstatus = Qstatus
-                print(Qstatus)
+                #print(Qstatus)
+            
+            # Sleep a bit to not block all others
             time.sleep(0.01)
             if maxOutput > 0:
                 for i in range(messagesGot, maxOutput):
@@ -477,17 +538,19 @@ class translator_worker(object):
                     statusQ.put(f"cached: {cache_result['text']}")
                     cached_translations = cached_translations + 1
 
-                    statusQ.put(f"cache hits percent: {(cached_translations / total_translations) * 100}")
+                    statusQ.put(f"cache hit: {(cached_translations / total_translations) * 100}% ({cached_translations} / {total_translations})")
 
                     outputline = googletrans.models.Translated(cache_result['src'], targetLang, cache_result['origin'], text = cache_result['text'], pronunciation = 'Unknown')
                 else:
                     outputline = translator.translate(inputline['msg'], targetLang)
                     statusQ.put(f"new translation: {outputline.text}")
-                    cache.addCache({
+                    truncated = cache.addCache({
                         'src': outputline.src,
                         'origin': outputline.origin,
                         'text': outputline.text
                     })
+                    if truncated:
+                        statusQ.put(f"truncated cache by: {truncated}")
                 old_outputline = outputline
                 
                 if inputline['player']:
