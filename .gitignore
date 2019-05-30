@@ -9,3 +9,4 @@ args.config_file
 *.spec
 test.log
 test.py
+pyinstaller/
