@@ -10,10 +10,10 @@ To view the translated text type this into your console: `exec csgo-translate`
 
 To make it easier to view translated text you can bind it to a key:
 
-`
+```
 alias trans "exec csgo-translate; toggleconsole"
 bind "F5" "trans"
-`
+```
 
 To start the translator either doubleclick it, or run it in a terminal window.
 
