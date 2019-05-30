@@ -9,6 +9,7 @@ Put this in your autoexec.cfg file, or typing it into the console, or adding it 
 To view the translated text type this into your console: `exec csgo-translate`
 
 To make it easier to view translated text you can bind it to a key:
+
 `
 alias trans "exec csgo-translate; toggleconsole"
 bind "F5" "trans"
