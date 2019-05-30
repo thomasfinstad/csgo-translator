@@ -1,0 +1,9 @@
+__*__
+.vscode
+build
+dist
+*.venv
+csgo/
+csgo.bak/
+args.config_file
+*.spec
