@@ -129,7 +129,7 @@ class controller(object):
 class chatLog(object):
     you_search = re.compile(r'^Player: (.*) - Damage (Taken|Given)$')
     you = False
-    talk_search = re.compile(r'^(?P<ping_messure>[ ]{10,})?(?P<is_dead>\*DEAD\*[ ]*)?(?P<player>.*?) : (?P<msg>.*)$')
+    talk_search = re.compile(r'^(?P<ping_messure>[ ]{10,})?(?P<is_dead>\*DEAD\*[ ]*)?(?P<team>\([a-zA-Z-]*Terrorist\) )?(?P<player>.*?)\u200e(?P<position> @ .*?)? : (?P<msg>.*)$')
     previousMatch = {'player': '', 'msg': ''}
     chatLines = []
     viewedChatIndex = 0
@@ -469,8 +469,11 @@ class translator_worker(object):
         self.inputQ.put(input)
 
     def getStatus(self):
-        while not self.statusQ.empty():
-            self.status = self.statusQ.get()
+        if not self.statusQ.empty():
+            status = self.statusQ.get()
+            while self.status == status and not self.statusQ.empty():
+                status = self.statusQ.get()
+            self.status = status
         return self.status
 
     def getOutput(self, minOutput=1, maxOutput=0, maxTries=100):
@@ -509,6 +512,7 @@ class translator_worker(object):
         old_outputline = ''
         total_translations = 0
         cached_translations = 0
+        old_status = ''
         while True:
             time.sleep(0.01)
             if not controlQ.empty():
@@ -525,7 +529,10 @@ class translator_worker(object):
                 time.sleep(0.2)
                 while outputQ.full():
                     time.sleep(0.1)
-                    statusQ.put('full')
+                    status = f"full"
+                    if old_status != status:
+                        old_status = status
+                        statusQ.put(status)
 
                 total_translations = total_translations + 1
 
@@ -535,22 +542,36 @@ class translator_worker(object):
                 old_inputtext = inputtext
                 cache_result = cache.checkCache(inputtext)
                 if cache_result:
-                    statusQ.put(f"cached: {cache_result['text']}")
-                    cached_translations = cached_translations + 1
+                    
+                    status = f"cached: {cache_result['text']}"
+                    if old_status != status:
+                        old_status = status
+                        statusQ.put(status)
 
-                    statusQ.put(f"cache hit: {(cached_translations / total_translations) * 100}% ({cached_translations} / {total_translations})")
+                    cached_translations = cached_translations + 1
+                    
+                    status = f"cache hit: {(cached_translations / total_translations) * 100}% ({cached_translations} / {total_translations})"
+                    if old_status != status:
+                        old_status = status
+                        statusQ.put(status)
 
                     outputline = googletrans.models.Translated(cache_result['src'], targetLang, cache_result['origin'], text = cache_result['text'], pronunciation = 'Unknown')
                 else:
                     outputline = translator.translate(inputline['msg'], targetLang)
-                    statusQ.put(f"new translation: {outputline.text}")
+                    status = f"new translation: {outputline.text}"
+                    if old_status != status:
+                        old_status = status
+                        statusQ.put(status)
                     truncated = cache.addCache({
                         'src': outputline.src,
                         'origin': outputline.origin,
                         'text': outputline.text
                     })
                     if truncated:
-                        statusQ.put(f"truncated cache by: {truncated}")
+                        status = f"truncated cache by: {truncated}"
+                        if old_status != status:
+                            old_status = status
+                            statusQ.put(status)
                 old_outputline = outputline
                 
                 if inputline['player']:
@@ -558,13 +579,17 @@ class translator_worker(object):
                 else :
                     outputline.player = "UNKNOWN"
                 outputQ.put(outputline)
+        status = f"complete"
+        if old_status != status:
+            old_status = status
+            statusQ.put(status)
+
 
 if __name__ == '__main__':
     mp.freeze_support()
     mp.set_start_method('spawn')
     console = viewConsole()
     config = config()
-    print(os.getenv('PWD'))
     #exit()
-    application = controller(os.getenv('PWD'), console, config)
+    application = controller(os.getcwd(), console, config)
     application.run()
