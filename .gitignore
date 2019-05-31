@@ -5,6 +5,7 @@ dist
 *.venv
 csgo/
 csgo.bak/
+csgo-translator_linux64
 args.config_file
 *.spec
 test.log

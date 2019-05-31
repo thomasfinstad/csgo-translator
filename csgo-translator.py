@@ -10,6 +10,11 @@ import googletrans
 import unicodedata
 import pickle
 from operator import itemgetter
+import kivy
+from kivy.app import App
+from kivy.uix.label import Label
+
+
 
 class controller(object):
     work_dir = ''
@@ -588,8 +593,11 @@ class translator_worker(object):
 if __name__ == '__main__':
     mp.freeze_support()
     mp.set_start_method('spawn')
+
+    kivy.require('1.10.1')
     console = viewConsole()
+
     config = config()
-    #exit()
+
     application = controller(os.getcwd(), console, config)
     application.run()
